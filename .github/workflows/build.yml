@@ -1,0 +1,45 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'   # 推送 v1.0.2 这样的 tag 时触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Package files (for release)
+        run: |
+          mkdir release_package
+          cp -r *.py *.txt *.ico images fishingimages release_package/ 2>/dev/null || true
+          # 排除虚拟环境和 git 相关
+          rm -rf release_package/__pycache__ release_package/.git release_package/venv*
+          cd release_package
+          zip -r ../异环薄荷AI.zip .
+          cd ..
+
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: 异环薄荷AI.zip
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            自动构建版本 ${{ github.ref_name }}
+            下载异环薄荷AI.zip 解压后运行 main.py 即可。
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

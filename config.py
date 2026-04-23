@@ -11,9 +11,9 @@ def get_version():
 
 VERSION = get_version()
 
-# GitHub 仓库（用于自动更新，若不需要可留空）
-REPO_OWNER = ""   # 改成你的用户名，如 "yourname"
-REPO_NAME = ""    # 改成你的仓库名，如 "NTE"
+# GitHub 仓库
+REPO_OWNER = "daoqi"
+REPO_NAME = "NTE-ai"
 
 BASE_DIR = Path(__file__).resolve().parent
 IMAGES_DIR = BASE_DIR / "images"

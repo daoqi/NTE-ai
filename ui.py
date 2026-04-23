@@ -18,7 +18,7 @@ from config import APP_NAME, VERSION, IMAGES_DIR
 from automation_thread import AutomationThread
 from auto_updater import AutoUpdater
 from floating_log import FloatingLogWindow
-
+QTimer.singleShot(1500, self.check_for_updates)
 class HotKeySignals(QObject):
     toggle_signal = pyqtSignal()
 
