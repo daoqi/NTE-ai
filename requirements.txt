@@ -1,0 +1,8 @@
+PyQt5>=5.15.0
+opencv-python>=4.5.0
+numpy>=1.21.0
+pyautogui>=0.9.53
+pillow>=9.0.0
+pynput>=1.7.6
+pygetwindow>=0.0.9
+PyDirectInput~=1.0.4
