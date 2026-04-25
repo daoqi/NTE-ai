@@ -7,14 +7,11 @@ import threading              # 导入多线程模块，用于异步处理捕获
 import queue                  # 导入队列模块，用于线程间安全传递检测结果
 import ctypes                 # 导入 ctypes 模块，用于调用 Windows API
 from ctypes import wintypes   # 导入 ctypes 的 Windows 类型定义
-
 import cv2                    # 导入 OpenCV 库，用于图像处理和模板匹配
 import numpy as np            # 导入 NumPy 库，用于数组操作和 HSV 转换
 import win32gui               # 导入 win32gui 库，用于获取窗口信息、坐标转换等
 import pydirectinput          # 导入 pydirectinput 库，用于模拟键盘按键（A/D）
-
 from windows_capture import WindowsCapture, Frame, InternalCaptureControl  # 导入 WGC 捕获相关类
-
 def resource_path(relative_path):
     """
     获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的 exe。

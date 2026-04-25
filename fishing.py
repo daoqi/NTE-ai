@@ -8,11 +8,11 @@ import win32gui
 from PIL import ImageGrab
 import cv2
 import numpy as np
-<<<<<<< HEAD
-import controlfishing_v2 as controlfishing
-=======
+# <<<<<<< HEAD
+# import controlfishing_v2 as controlfishing
+# =======
 import controlfishing as controlfishing
->>>>>>> a3f7a6d (v1.0.8: 优化钓鱼逻辑，增加超时退出；修复日志浮窗位置；排除自身窗口；F12控制钓鱼)
+# >>>>>>> (v1.0.8: 优化钓鱼逻辑，增加超时退出；修复日志浮窗位置；排除自身窗口；F12控制钓鱼)
 import traceback
 import buy_bait
 def resource_path(relative_path):
