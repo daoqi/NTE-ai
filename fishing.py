@@ -8,7 +8,7 @@ import win32gui
 from PIL import ImageGrab
 import cv2
 import numpy as np
-import controlfishing
+import controlfishing_v2 as controlfishing
 import traceback
 
 def resource_path(relative_path):

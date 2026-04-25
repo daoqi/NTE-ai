@@ -334,6 +334,8 @@ class NeonMainWindow(QMainWindow):
             env = os.environ.copy()
             env["FISHING_TARGET_HWND"] = str(hwnd)
             env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONIOENCODING"] = "utf-8"   
+            env["PYTHONUTF8"] = "1"              
             self.fishing_process = subprocess.Popen(
                 [sys.executable, "-u", script_path],
                 stdout=subprocess.PIPE,

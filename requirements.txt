@@ -7,3 +7,4 @@ pynput>=1.7.6
 pygetwindow>=0.0.9
 pywin32>=305
 pydirectinput>=1.0.4
+windows-capture>=1.4.0
