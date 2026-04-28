@@ -12,6 +12,10 @@ import numpy as np            # 导入 NumPy 库，用于数组操作和 HSV 转
 import win32gui               # 导入 win32gui 库，用于获取窗口信息、坐标转换等
 import pydirectinput          # 导入 pydirectinput 库，用于模拟键盘按键（A/D）
 from windows_capture import WindowsCapture, Frame, InternalCaptureControl  # 导入 WGC 捕获相关类
+
+# 减少 pydirectinput 自带的固定等待，降低按键下发延迟
+pydirectinput.PAUSE = 0
+pydirectinput.FAILSAFE = False
 def resource_path(relative_path):
     """
     获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的 exe。
@@ -34,6 +38,10 @@ GREEN_HSV_LOWER = np.array([60, 100, 150])
 GREEN_HSV_UPPER = np.array([90, 255, 255])
 # 黄色标记模板匹配置信度阈值，高于此值认为匹配成功
 YELLOW_MATCH_THRESH = 0.6
+# 黄色标记检测加速参数（越激进越快）
+YELLOW_FULL_SCAN_INTERVAL = 6       # 每 N 帧做一次全局模板扫描，其余帧优先局部搜索
+YELLOW_SEARCH_MARGIN = 80           # 以上一帧位置为中心的局部搜索半宽（像素）
+YELLOW_LOST_FULL_SCAN_FRAMES = 12   # 连续丢失多少帧后强制改回全局扫描
 # 范围保持控制器参数（加速版）
 GREEN_BUFFER_PCT = 0.15          # 绿色区域缓冲区比例（左右各缩进 15%），更早介入调整
 PULSE_SCALE = 0.004              # 脉冲系数：每秒每像素的脉冲时长（秒/像素），移动快则脉冲长
@@ -75,19 +83,16 @@ def get_client_crop(hwnd):
     }
 # ---------- 检测函数 ----------
 
-def detect_green_zone(frame_rgb):
+def detect_green_zone(roi_bgr):
     """
-    在指定的 ROI 区域内检测绿色评分带，返回其左右边界 X 坐标（完整帧中的坐标）。
-    参数 frame_rgb：RGB 格式的完整帧图像
-    返回 (left_x, right_x) 或 None
+    在 ROI 小图中检测绿色评分带，返回其左右边界 X 坐标（ROI 内坐标）。
+    参数 roi_bgr：BGR 格式的 ROI 图像
+    返回 (left_x, right_x) 或 None（均为 ROI 内坐标）
     """
-    roi_l, roi_t, roi_r, roi_b = ROI                                      # 解包 ROI 矩形
-    h, w = frame_rgb.shape[:2]                                           # 获取整帧图像高度和宽度
-    # 检查 ROI 是否在图像范围内
-    if roi_r > w or roi_b > h or roi_l < 0 or roi_t < 0:
-        return None                                                      # 超出范围，返回 None
-    roi_img = frame_rgb[roi_t:roi_b, roi_l:roi_r]                         # 截取 ROI 区域
-    hsv = cv2.cvtColor(roi_img, cv2.COLOR_RGB2HSV)                        # 转换为 HSV 颜色空间
+    if roi_bgr is None or roi_bgr.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)                        # 转换为 HSV 颜色空间
     mask = cv2.inRange(hsv, GREEN_HSV_LOWER, GREEN_HSV_UPPER)             # 创建绿色区域的二值掩膜
     cols = np.any(mask > 0, axis=0)                                       # 按列检查是否存在绿色像素
     indices = np.where(cols)[0]                                           # 获取存在绿色像素的列索引
@@ -95,39 +100,50 @@ def detect_green_zone(frame_rgb):
     if len(indices) == 0:                                                 # 未检测到任何绿色像素
         return None
 
-    # 返回绿色区域的左右边界（相对于完整帧的 X 坐标）
-    return (int(indices[0]) + roi_l, int(indices[-1]) + roi_l)
+    return (int(indices[0]), int(indices[-1]))
 
 
-def detect_yellow_marker(frame_rgb, template):
+def detect_yellow_marker(roi_gray, template, search_center_x=None, search_margin=0):
     """
-    在 ROI 区域内检测黄色标记（使用模板匹配），返回其中心 X 坐标（完整帧中的坐标）。
-    参数 frame_rgb：RGB 格式的完整帧图像
+    在 ROI 区域内检测黄色标记（使用模板匹配），返回其中心 X 坐标（ROI 内坐标）。
+    参数 roi_gray：灰度 ROI 图像
     参数 template：黄色标记的灰度模板图像
-    返回中心 X 坐标或 None
+    参数 search_center_x：局部搜索中心 X（ROI 内坐标），None 表示全局搜索
+    参数 search_margin：局部搜索半宽（像素）
+    返回中心 X 坐标或 None（ROI 内坐标）
     """
-    if template is None:                                                 # 模板为空则无法匹配
+    if template is None or roi_gray is None:                             # 模板为空则无法匹配
         return None
-
-    roi_l, roi_t, roi_r, roi_b = ROI                                      # 解包 ROI
-    h, w = frame_rgb.shape[:2]                                           # 获取图像尺寸
-    if roi_r > w or roi_b > h or roi_l < 0 or roi_t < 0:
-        return None                                                      # ROI 越界返回 None
-
-    roi_img = frame_rgb[roi_t:roi_b, roi_l:roi_r]                         # 截取 ROI
-    gray = cv2.cvtColor(roi_img, cv2.COLOR_RGB2GRAY)                      # 转为灰度图
-
     th, tw = template.shape[:2]                                           # 模板高度和宽度
-    if gray.shape[0] < th or gray.shape[1] < tw:                          # 图像太小无法匹配模板
+    if roi_gray.shape[0] < th or roi_gray.shape[1] < tw:                  # 图像太小无法匹配模板
         return None
 
-    result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)      # 归一化相关系数模板匹配
+    x_offset = 0
+    search_img = roi_gray
+    if search_center_x is not None and search_margin > 0:
+        roi_w = roi_gray.shape[1]
+        max_start = roi_w - tw
+        if max_start < 0:
+            return None
+        left = max(0, int(search_center_x - search_margin))
+        right = min(roi_w, int(search_center_x + search_margin + 1))
+        # 保证搜索宽度至少容纳一个模板宽度
+        if right - left < tw:
+            need = tw - (right - left)
+            left = max(0, left - need // 2)
+            right = min(roi_w, right + (need - need // 2))
+            if right - left < tw:
+                left = max(0, min(left, max_start))
+                right = left + tw
+        search_img = roi_gray[:, left:right]
+        x_offset = left
+
+    result = cv2.matchTemplate(search_img, template, cv2.TM_CCOEFF_NORMED)  # 归一化相关系数模板匹配
     _, max_val, _, max_loc = cv2.minMaxLoc(result)                        # 获取最佳匹配位置和相似度
     if max_val < YELLOW_MATCH_THRESH:                                     # 相似度不足则忽略
         return None
 
-    # 计算中心点 X 坐标并转换为完整帧坐标
-    return max_loc[0] + tw // 2 + roi_l
+    return max_loc[0] + tw // 2 + x_offset
 
 
 # ---------- 捕获工作线程 ----------
@@ -150,6 +166,9 @@ class CaptureWorker:
         self.first_frame_event = first_frame_event   # 保存首帧事件
         self.crop = get_client_crop(hwnd)            # 预先计算裁剪偏移（注意：窗口移动后需重新计算，但当前简单处理）
         self.capture_handle = None                   # WGC 会话句柄，用于停止
+        self.frame_index = 0                         # 帧计数，用于控制全局扫描间隔
+        self.last_yellow_x = None                    # 最近一次黄色标记位置（ROI 内坐标）
+        self.frames_since_yellow = 0                 # 连续丢失计数
 
     def start(self):
         """
@@ -174,6 +193,7 @@ class CaptureWorker:
                 return
 
             try:
+                self.frame_index += 1
                 # 裁剪出客户区部分
                 arr = frame.frame_buffer            # 获取帧数据（BGRA 格式）
                 fh, fw = arr.shape[:2]              # 帧高度和宽度
@@ -184,14 +204,47 @@ class CaptureWorker:
                 cb = min(ct + self.crop['height'], fh)
                 arr = arr[ct:cb, cl:cr]             # 裁切出客户区图像
 
-                rgb = cv2.cvtColor(arr, cv2.COLOR_BGRA2RGB)   # 转为 RGB 格式供检测函数使用
+                roi_l, roi_t, roi_r, roi_b = ROI
+                h, w = arr.shape[:2]
+                # 直接在客户区里裁剪 ROI，避免整帧颜色转换
+                if roi_r > w or roi_b > h or roi_l < 0 or roi_t < 0:
+                    self.first_frame_event.set()
+                    return
+                roi_bgra = arr[roi_t:roi_b, roi_l:roi_r]
+                roi_bgr = roi_bgra[:, :, :3]        # BGRA 前三通道即 BGR，避免额外颜色转换
+                roi_gray = cv2.cvtColor(roi_bgra, cv2.COLOR_BGRA2GRAY)
 
-                # 执行检测
-                green = detect_green_zone(rgb)                  # 绿色区域边界
-                yellow_x = detect_yellow_marker(rgb, self.hs_template)  # 黄色标记中心 X
+                # 执行检测（都在 ROI 坐标系内）
+                green = detect_green_zone(roi_bgr)
+                force_full_scan = (
+                    self.last_yellow_x is None
+                    or self.frames_since_yellow >= YELLOW_LOST_FULL_SCAN_FRAMES
+                    or (self.frame_index % YELLOW_FULL_SCAN_INTERVAL == 0)
+                )
+
+                if force_full_scan:
+                    yellow_x = detect_yellow_marker(roi_gray, self.hs_template)
+                else:
+                    yellow_x = detect_yellow_marker(
+                        roi_gray,
+                        self.hs_template,
+                        search_center_x=self.last_yellow_x,
+                        search_margin=YELLOW_SEARCH_MARGIN,
+                    )
+                    # 局部搜索失败时，立即回退一次全局扫描，减少丢锁时间
+                    if yellow_x is None:
+                        yellow_x = detect_yellow_marker(roi_gray, self.hs_template)
+
+                if yellow_x is not None:
+                    self.last_yellow_x = yellow_x
+                    self.frames_since_yellow = 0
+                else:
+                    self.frames_since_yellow += 1
+                    # 丢锁时临时沿用上次结果，尽量保持控制连续性
+                    yellow_x = self.last_yellow_x
 
                 if green is not None and yellow_x is not None:
-                    detection = (yellow_x, green[0], green[1])  # 构建检测结果元组
+                    detection = (yellow_x, green[0], green[1])  # 构建 ROI 内检测结果元组
                     # 尝试放入队列，若队列已满则丢弃旧数据再放入最新
                     try:
                         detection_queue.put_nowait(detection)
@@ -232,9 +285,9 @@ class CaptureWorker:
 
 def control_worker(stop_event):
     """
-    最快响应：根据最新偏差，持续按键直到偏差小于死区。
+    最快响应：根据最新偏差持续按键；当黄色进入绿色中心 45% 区域时暂停移动。
     """
-    DEAD_ZONE = 3  # 死区，偏差绝对值小于此值停止按键
+    CENTER_STOP_RATIO = 0.45  # 中心停止区比例（绿色宽度的 45%）
     while not stop_event.is_set():
         try:
             yellow_x, green_left, green_right = detection_queue.get_nowait()
@@ -243,11 +296,13 @@ def control_worker(stop_event):
             continue
 
         green_center = (green_left + green_right) // 2
+        green_width = max(1, green_right - green_left + 1)
         deviation = yellow_x - green_center
         abs_dev = abs(deviation)
+        center_stop_half = max(1, int(green_width * CENTER_STOP_RATIO * 0.5))
 
-        if abs_dev <= DEAD_ZONE:
-            # 偏差足够小，释放所有键
+        if abs_dev <= center_stop_half:
+            # 黄色位于绿色中心 45% 区域内，释放所有键暂停移动
             pydirectinput.keyUp('a')
             pydirectinput.keyUp('d')
         elif deviation > 0:
